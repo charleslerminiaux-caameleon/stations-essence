@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prix Carburants</title>
+<meta name="description" content="Carte des stations-essence et des prix des carburants en France, en temps réel.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #e2e5eb;
+    --accent: #1f6feb; --cheap: #1e9e5a; --mid: #e08a00; --dear: #d63b3b; --shadow: 0 2px 10px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --panel: #1b1f27; --text: #e7eaf0; --muted: #98a0b0; --border: #2b313c;
+      --accent: #4c8dff; --shadow: 0 2px 10px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151b; --panel: #1b1f27; --text: #e7eaf0; --muted: #98a0b0; --border: #2b313c;
+    --accent: #4c8dff; --shadow: 0 2px 10px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; }
+
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0 12px 0 0; white-space: nowrap; }
+  .search { position: relative; flex: 1 1 260px; display: flex; gap: 6px; }
+  .search input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #suggestions { position: absolute; top: 100%; left: 0; right: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); z-index: 1000; margin-top: 4px; list-style: none; padding: 4px 0; display: none; }
+  #suggestions li { padding: 8px 12px; cursor: pointer; }
+  #suggestions li:hover, #suggestions li.active { background: var(--bg); }
+  #suggestions small { color: var(--muted); }
+
+  .fuels { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fuels button { padding: 6px 10px; font-size: 14px; }
+  .fuels button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #map { flex: 1; min-height: 300px; }
+  aside { width: 360px; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  #status { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  #list { overflow-y: auto; flex: 1; }
+  .item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; gap: 10px; align-items: center; }
+  .item:hover { background: var(--bg); }
+  .item .price { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+  .item .info { flex: 1; min-width: 0; }
+  .item .addr { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .meta { color: var(--muted); font-size: 12px; }
+  .rank { color: var(--muted); font-size: 12px; width: 20px; }
+
+  .marker { border-radius: 6px; color: #fff; font: 700 12px/1 system-ui, sans-serif; padding: 4px 5px; box-shadow: 0 1px 4px rgba(0,0,0,.35); white-space: nowrap; text-align: center; border: 1.5px solid #fff; }
+  .c-cheap { background: var(--cheap); } .c-mid { background: var(--mid); } .c-dear { background: var(--dear); }
+  .t-cheap { color: var(--cheap); } .t-mid { color: var(--mid); } .t-dear { color: var(--dear); }
+
+  .leaflet-popup-content { margin: 12px 14px; min-width: 220px; }
+  .pop h3 { margin: 0 0 2px; font-size: 15px; }
+  .pop .sub { color: #666; font-size: 12px; margin-bottom: 8px; }
+  .pop table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .pop td { padding: 3px 0; border-bottom: 1px solid #eee; }
+  .pop td.p { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pop td.d { text-align: right; color: #888; font-size: 11px; padding-left: 8px; }
+  .pop tr.sel td { color: #1f6feb; }
+  .pop a { display: inline-block; margin-top: 8px; }
+
+  #reload { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 500; display: none; box-shadow: var(--shadow); }
+  .mapwrap { flex: 1; position: relative; display: flex; }
+  .legend { position: absolute; bottom: 18px; left: 10px; z-index: 500; background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px; box-shadow: var(--shadow); display: flex; gap: 10px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  .legend .l1::before { background: var(--cheap); } .legend .l2::before { background: var(--mid); } .legend .l3::before { background: var(--dear); }
+
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    .mapwrap { flex: 0 0 55vh; }
+    aside { width: auto; border-left: 0; border-top: 1px solid var(--border); flex: 1; }
+    header h1 { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>⛽ Prix Carburants</h1>
+  <div class="search">
+    <input id="q" type="search" placeholder="Ville, adresse ou code postal…" autocomplete="off">
+    <button class="primary" id="go">Chercher</button>
+    <button id="me" title="Autour de moi">📍</button>
+    <ul id="suggestions"></ul>
+  </div>
+  <div class="fuels" id="fuels"></div>
+</header>
+<main>
+  <div class="mapwrap">
+    <div id="map"></div>
+    <button id="reload" class="primary">Rechercher dans cette zone</button>
+    <div class="legend"><span class="l1">Moins cher</span><span class="l2">Moyen</span><span class="l3">Plus cher</span></div>
+  </div>
+  <aside>
+    <div id="status">Chargement…</div>
+    <div id="list"></div>
+  </aside>
+</main>
+
+<script>
+const API = "https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records";
+const GEOCODERS = ["https://data.geopf.fr/geocodage/search", "https://api-adresse.data.gouv.fr/search/"];
+const FUELS = [
+  { key: "gazole", label: "Gazole" },
+  { key: "sp95",   label: "SP95" },
+  { key: "e10",    label: "SP95-E10" },
+  { key: "sp98",   label: "SP98" },
+  { key: "e85",    label: "E85" },
+  { key: "gplc",   label: "GPLc" },
+];
+const MAX_AGE_DAYS = 30;
+const PAGE = 100, PAGES = 3;
+
+let fuel = "gazole";
+try { fuel = localStorage.getItem("fuel") || fuel; } catch (e) {}
+if (!FUELS.some(f => f.key === fuel)) fuel = "gazole";
+
+const map = L.map("map", { zoomControl: true }).setView([46.6, 2.4], 6);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Prix : data.economie.gouv.fr'
+}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+let stations = [], markers = {}, lastCenter = null, meMarker = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = p => p.toFixed(3).replace(".", ",") + " €";
+const label = k => FUELS.find(f => f.key === k)?.label || k;
+
+// --- Fuel selector
+function renderFuels() {
+  $("fuels").innerHTML = FUELS.map(f => `<button data-k="${f.key}" class="${f.key === fuel ? "on" : ""}">${f.label}</button>`).join("");
+}
+$("fuels").addEventListener("click", e => {
+  const k = e.target.dataset?.k; if (!k || k === fuel) return;
+  fuel = k; try { localStorage.setItem("fuel", k); } catch (e) {}
+  renderFuels(); load();
+});
+renderFuels();
+
+// --- Data
+function coords(r) {
+  if (r.geom && r.geom.lat != null) return [+r.geom.lat, +r.geom.lon];
+  const la = parseFloat(r.latitude), lo = parseFloat(r.longitude);
+  if (isNaN(la) || isNaN(lo)) return null;
+  return Math.abs(la) > 90 ? [la / 100000, lo / 100000] : [la, lo];
+}
+function isFresh(d) {
+  if (!d) return false;
+  const t = new Date(d).getTime();
+  return !isNaN(t) && Date.now() - t <= MAX_AGE_DAYS * 864e5;
+}
+function radiusKm() {
+  const b = map.getBounds();
+  const km = map.getCenter().distanceTo(b.getNorthEast()) / 1000;
+  return Math.max(3, Math.min(40, Math.round(km)));
+}
+
+let loadId = 0;
+async function load() {
+  const id = ++loadId;
+  const c = map.getCenter(); lastCenter = c;
+  $("reload").style.display = "none";
+  if (map.getZoom() < 9) {
+    layer.clearLayers(); stations = []; $("list").innerHTML = "";
+    $("status").textContent = "Cherchez une ville ou zoomez sur la carte pour afficher les stations.";
+    return;
+  }
+  const km = radiusKm();
+  $("status").textContent = `Chargement des prix (${label(fuel)}, rayon ${km} km)…`;
+  const where = `within_distance(geom, geom'POINT(${c.lng.toFixed(5)} ${c.lat.toFixed(5)})', ${km}km) and ${fuel}_prix is not null`;
+  try {
+    const pages = await Promise.all([...Array(PAGES).keys()].map(i => {
+      const u = new URL(API);
+      u.searchParams.set("where", where);
+      u.searchParams.set("order_by", `${fuel}_prix asc`);
+      u.searchParams.set("limit", PAGE);
+      u.searchParams.set("offset", i * PAGE);
+      return fetch(u).then(r => r.ok ? r.json() : { results: [] });
+    }));
+    if (id !== loadId) return;
+    const seen = new Set();
+    stations = pages.flatMap(p => p.results || []).filter(r => {
+      if (seen.has(r.id)) return false; seen.add(r.id);
+      return coords(r) && r[`${fuel}_prix`] && isFresh(r[`${fuel}_maj`]);
+    }).map(r => ({ r, ll: coords(r), price: +r[`${fuel}_prix`], dist: c.distanceTo(coords(r)) / 1000 }));
+    stations.sort((a, b) => a.price - b.price || a.dist - b.dist);
+    render();
+  } catch (err) {
+    if (id !== loadId) return;
+    $("status").textContent = "Impossible de charger les prix. Vérifiez votre connexion et réessayez.";
+    console.error(err);
+  }
+}
+
+function tier(p, lo, hi) {
+  if (hi - lo < 0.005) return "cheap";
+  const x = (p - lo) / (hi - lo);
+  return x < 0.33 ? "cheap" : x < 0.66 ? "mid" : "dear";
+}
+
+function render() {
+  layer.clearLayers(); markers = {};
+  if (!stations.length) {
+    $("list").innerHTML = "";
+    $("status").textContent = `Aucune station avec un prix ${label(fuel)} récent dans cette zone.`;
+    return;
+  }
+  const prices = stations.map(s => s.price);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+  $("status").innerHTML = `<b>${stations.length}</b> stations · ${esc(label(fuel))} · min <b class="t-cheap">${fmt(lo)}</b> · moy ${fmt(avg)} · max <b class="t-dear">${fmt(hi)}</b>`;
+
+  stations.forEach(s => {
+    const t = tier(s.price, lo, hi); s.tier = t;
+    const icon = L.divIcon({ className: "", html: `<div class="marker c-${t}">${s.price.toFixed(3)}</div>`, iconSize: null, iconAnchor: [24, 12] });
+    const m = L.marker(s.ll, { icon, zIndexOffset: t === "cheap" ? 1000 : t === "mid" ? 500 : 0 }).bindPopup(() => popup(s.r));
+    m.addTo(layer); markers[s.r.id] = m;
+  });
+
+  $("list").innerHTML = stations.map((s, i) => `
+    <div class="item" data-id="${esc(s.r.id)}">
+      <div class="rank">${i + 1}</div>
+      <div class="info">
+        <div class="addr">${esc(title(s.r.adresse))}</div>
+        <div class="meta">${esc(s.r.cp || "")} ${esc(title(s.r.ville))} · ${s.dist.toFixed(1).replace(".", ",")} km · ${ago(s.r[`${fuel}_maj`])}</div>
+      </div>
+      <div class="price t-${s.tier}">${fmt(s.price)}</div>
+    </div>`).join("");
+}
+
+$("list").addEventListener("click", e => {
+  const el = e.target.closest(".item"); if (!el) return;
+  const m = markers[el.dataset.id]; if (!m) return;
+  map.setView(m.getLatLng(), Math.max(map.getZoom(), 15), { animate: true });
+  setTimeout(() => m.openPopup(), 300);
+});
+
+function title(s) { return String(s || "").toLowerCase().replace(/(^|[\s\-'])\S/g, c => c.toUpperCase()); }
+function ago(d) {
+  if (!d) return "";
+  const h = (Date.now() - new Date(d).getTime()) / 36e5;
+  if (h < 1) return "à l'instant";
+  if (h < 24) return `il y a ${Math.round(h)} h`;
+  return `il y a ${Math.round(h / 24)} j`;
+}
+
+function popup(r) {
+  const rows = FUELS.map(f => {
+    const p = r[`${f.key}_prix`], d = r[`${f.key}_maj`];
+    if (!p || !isFresh(d)) return "";
+    return `<tr class="${f.key === fuel ? "sel" : ""}"><td>${f.label}</td><td class="p">${fmt(+p)}</td><td class="d">${ago(d)}</td></tr>`;
+  }).join("");
+  const ll = coords(r);
+  const services = Array.isArray(r.services_service) ? r.services_service : [];
+  const h24 = r.horaires_automate_24_24 === "Oui" ? " · Automate 24/24" : "";
+  return `<div class="pop">
+    <h3>${esc(title(r.adresse))}</h3>
+    <div class="sub">${esc(r.cp || "")} ${esc(title(r.ville))}${h24}</div>
+    <table>${rows || "<tr><td>Aucun prix récent</td></tr>"}</table>
+    ${services.length ? `<div class="sub" style="margin-top:8px">${services.slice(0, 6).map(esc).join(" · ")}</div>` : ""}
+    <a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${ll[0]},${ll[1]}">Itinéraire →</a>
+  </div>`;
+}
+
+// --- Reload when the map moves
+map.on("moveend", () => {
+  if (!lastCenter) return;
+  if (map.getZoom() < 9) return;
+  const moved = map.getCenter().distanceTo(lastCenter) / 1000;
+  if (moved > radiusKm() * 0.4 || !stations.length) $("reload").style.display = "block";
+});
+$("reload").onclick = load;
+
+// --- Geocoding
+async function geocode(q, limit = 5) {
+  for (const base of GEOCODERS) {
+    try {
+      const u = new URL(base); u.searchParams.set("q", q); u.searchParams.set("limit", limit);
+      const r = await fetch(u); if (!r.ok) continue;
+      const j = await r.json(); if (j.features) return j.features;
+    } catch (e) {}
+  }
+  return [];
+}
+function goTo(f) {
+  const [lon, lat] = f.geometry.coordinates;
+  const zoom = { municipality: 13, city: 13, locality: 14, street: 15, housenumber: 15 }[f.properties.type] || 13;
+  $("suggestions").style.display = "none";
+  $("q").value = f.properties.label;
+  map.setView([lat, lon], zoom);
+  load();
+}
+let sugg = [], sugIdx = -1, sugTimer;
+$("q").addEventListener("input", () => {
+  clearTimeout(sugTimer);
+  const q = $("q").value.trim();
+  if (q.length < 3) { $("suggestions").style.display = "none"; return; }
+  sugTimer = setTimeout(async () => {
+    sugg = await geocode(q); sugIdx = -1;
+    $("suggestions").innerHTML = sugg.map((f, i) => `<li data-i="${i}">${esc(f.properties.label)} <small>${esc(f.properties.context || "")}</small></li>`).join("");
+    $("suggestions").style.display = sugg.length ? "block" : "none";
+  }, 250);
+});
+$("q").addEventListener("keydown", e => {
+  const items = [...$("suggestions").children];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!items.length) return; e.preventDefault();
+    sugIdx = (sugIdx + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items.forEach((li, i) => li.classList.toggle("active", i === sugIdx));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (sugIdx >= 0 && sugg[sugIdx]) goTo(sugg[sugIdx]); else search();
+  } else if (e.key === "Escape") $("suggestions").style.display = "none";
+});
+$("suggestions").addEventListener("mousedown", e => {
+  const li = e.target.closest("li"); if (li) goTo(sugg[+li.dataset.i]);
+});
+document.addEventListener("click", e => { if (!e.target.closest(".search")) $("suggestions").style.display = "none"; });
+async function search() {
+  const q = $("q").value.trim(); if (!q) return;
+  $("status").textContent = "Recherche de l'adresse…";
+  const res = await geocode(q, 1);
+  if (res.length) goTo(res[0]); else $("status").textContent = `Adresse introuvable : « ${q} »`;
+}
+$("go").onclick = search;
+
+// --- Around me
+$("me").onclick = () => {
+  if (!navigator.geolocation) { $("status").textContent = "La géolocalisation n'est pas disponible."; return; }
+  $("status").textContent = "Localisation en cours…";
+  navigator.geolocation.getCurrentPosition(p => {
+    const ll = [p.coords.latitude, p.coords.longitude];
+    if (meMarker) meMarker.remove();
+    meMarker = L.circleMarker(ll, { radius: 8, color: "#fff", weight: 3, fillColor: "#1f6feb", fillOpacity: 1 }).addTo(map).bindTooltip("Vous êtes ici");
+    map.setView(ll, 13); load();
+  }, () => { $("status").textContent = "Position refusée ou indisponible. Cherchez une ville à la place."; }, { enableHighAccuracy: true, timeout: 10000 });
+};
+
+load();
+</script>
+</body>
+</html>
