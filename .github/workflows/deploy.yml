@@ -21,7 +21,9 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ vars.FTP_SERVER_DIR || './' }}
+          # Le compte FTP Hostinger démarre dans public_html de caameleon.com :
+          # le sous-domaine stations.caameleon.com correspond au dossier stations/.
+          server-dir: stations/
           exclude: |
             **/.git*
             **/.git*/**
