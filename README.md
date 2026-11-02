@@ -18,7 +18,9 @@ Réglages à faire une fois dans GitHub (**Settings → Secrets and variables �
 | Secret   | `FTP_SERVER`     | Hôte FTP, ex. `ftp.caameleon.com` ou l'adresse IP   |
 | Secret   | `FTP_USERNAME`   | Identifiant FTP                                     |
 | Secret   | `FTP_PASSWORD`   | Mot de passe FTP                                    |
-| Variable | `FTP_SERVER_DIR` | Dossier du sous-domaine, terminé par `/` (facultatif si le compte FTP pointe déjà dessus) |
 
-Le plus simple : créer dans hPanel un compte FTP dédié dont le dossier est celui
-du sous-domaine `stations` ; `FTP_SERVER_DIR` est alors inutile.
+
+Le dossier de destination est fixé dans le workflow : `stations/`. Le compte FTP
+démarre dans `public_html` de caameleon.com, et le sous-domaine
+`stations.caameleon.com` pointe vers `public_html/stations`. La variable
+`FTP_SERVER_DIR` n'est plus utilisée.
