@@ -1,8 +1,11 @@
 """Télécharge les logos officiels des principales enseignes dans logos/.
 
-Source : la marque Wikidata (tag OSM brand:wikidata) → propriété « logo » (P154)
-→ fichier sur Wikimedia Commons (rendu en PNG). À défaut, l'icône
-« apple-touch-icon » du site officiel de la marque (P856).
+Sources, dans l'ordre :
+ 1. Wikidata de la marque (tag OSM brand:wikidata) : icône (P8972, P2910) puis
+    logo (P154), fichier sur Wikimedia Commons rendu en PNG ;
+ 2. le logo de l'infobox de la page Wikipédia (en, puis fr) de la marque —
+    utile pour les logos non libres (Carrefour, Système U…) absents de Commons ;
+ 3. l'icône « apple-touch-icon » du site officiel (P856).
 Résultat : logos/<QID>.png + logos/index.json {QID: {name, file, source, count}}.
 """
 import collections
@@ -19,6 +22,29 @@ from common import france_fuel_stations, get_json, http  # noqa: E402
 OUT = os.path.join(os.path.dirname(__file__), "..", "logos")
 MIN_STATIONS = int(os.environ.get("MIN_STATIONS", "10"))
 MAX_BRANDS = int(os.environ.get("MAX_BRANDS", "60"))
+# Pages Wikipédia à utiliser quand la marque n'a pas sa propre page (ex. « Station U »).
+WIKI_TITLES = {
+    "Q2529029": ["Système U"],
+    "Q2689639": ["Carrefour (company)", "Carrefour (entreprise)"],
+    "Q2940188": ["Carrefour (company)", "Carrefour (entreprise)"],
+}
+
+
+def wiki_logo(lang, title):
+    api = f"https://{lang}.wikipedia.org/w/api.php?"
+    j = get_json(api + urllib.parse.urlencode(
+        {"action": "query", "titles": title, "prop": "images", "imlimit": "100", "redirects": "1", "format": "json"}))
+    files = [i["title"] for p in j.get("query", {}).get("pages", {}).values() for i in p.get("images", [])]
+    files = [f for f in files if "logo" in f.lower() and re.search(r"\.(svg|png)$", f, re.I)]
+    if not files:
+        raise ValueError("aucune image « logo »")
+    j = get_json(api + urllib.parse.urlencode(
+        {"action": "query", "titles": files[0], "prop": "imageinfo", "iiprop": "url", "iiurlwidth": "256", "format": "json"}))
+    info = next(iter(j["query"]["pages"].values()))["imageinfo"][0]
+    body, ctype = http(info.get("thumburl") or info["url"], timeout=60)
+    if not ctype.startswith("image/"):
+        raise ValueError(f"type inattendu {ctype}")
+    return body, f"{lang}.wikipedia:{files[0]}"
 
 
 def commons_png(filename, width=256):
@@ -63,7 +89,7 @@ def main():
     for i in range(0, len(top), 50):
         batch = top[i:i + 50]
         j = get_json("https://www.wikidata.org/w/api.php?" + urllib.parse.urlencode(
-            {"action": "wbgetentities", "ids": "|".join(batch), "props": "claims|labels", "languages": "fr|en", "format": "json"}))
+            {"action": "wbgetentities", "ids": "|".join(batch), "props": "claims|labels|sitelinks", "languages": "fr|en", "format": "json"}))
         ents.update(j.get("entities", {}))
 
     def claim(e, p):
@@ -76,13 +102,25 @@ def main():
         e = ents.get(q, {})
         name = names[q]
         body = source = None
-        logo = claim(e, "P154")
-        if logo:
+        for prop in ("P8972", "P2910", "P154"):
+            logo = claim(e, prop)
+            if not logo or body is not None:
+                continue
             try:
                 body, _ = commons_png(logo)
                 source = f"commons:{logo}"
             except Exception as ex:  # noqa: BLE001
                 print(f"  {q} {name}: Commons KO ({ex})")
+        if body is None:
+            links = e.get("sitelinks", {})
+            tries = [(l, links[f"{l}wiki"]["title"]) for l in ("en", "fr") if f"{l}wiki" in links]
+            tries += [(l, t) for t in WIKI_TITLES.get(q, []) for l in ("en", "fr")]
+            for lang, title in tries:
+                try:
+                    body, source = wiki_logo(lang, title)
+                    break
+                except Exception as ex:  # noqa: BLE001
+                    print(f"  {q} {name}: {lang}.wikipedia « {title} » KO ({ex})")
         if body is None:
             site = claim(e, "P856")
             if site:
