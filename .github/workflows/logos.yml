@@ -30,4 +30,5 @@ jobs:
           git add logos
           git diff --cached --quiet && echo "Aucun changement" && exit 0
           git commit -m "Logos des enseignes (téléchargés automatiquement)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
           git push

@@ -27,15 +27,15 @@ def get_json(url, **kw):
 
 def france_fuel_stations():
     """Toutes les stations-service (amenity=fuel) de France métropolitaine et DOM selon OpenStreetMap."""
-    q = """[out:json][timeout:600];
+    q = """[out:json][timeout:300];
 area["ISO3166-1"="FR"][admin_level=2]->.fr;
 nwr["amenity"="fuel"](area.fr);
 out center tags;"""
     last = None
-    for attempt in range(3):
+    for attempt in range(2):
         for url in OVERPASS:
             try:
-                j = get_json(url, data=urllib.parse.urlencode({"data": q}).encode(), timeout=900)
+                j = get_json(url, data=urllib.parse.urlencode({"data": q}).encode(), timeout=330)
                 els = j.get("elements") or []
                 if len(els) > 5000:
                     out = []
