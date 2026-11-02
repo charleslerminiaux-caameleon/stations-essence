@@ -11,6 +11,18 @@
   "source": "commons:Intermarché logo 2009 classic.svg",
   "count": 1625
  },
+ "Q217599": {
+  "name": "Carrefour",
+  "file": "Q217599.png",
+  "source": "en.wikipedia:File:Carrefour-Mobile-logo.svg",
+  "count": 972
+ },
+ "Q2529029": {
+  "name": "Station U",
+  "file": "Q2529029.png",
+  "source": "en.wikipedia:File:Commons-logo.svg",
+  "count": 879
+ },
  "Q1273376": {
   "name": "E.Leclerc",
   "file": "Q1273376.png",
@@ -41,6 +53,12 @@
   "source": "commons:Auchan Retail logo.svg",
   "count": 273
  },
+ "Q2689639": {
+  "name": "Carrefour Market",
+  "file": "Q2689639.png",
+  "source": "en.wikipedia:File:Carrefour Market Logo.png",
+  "count": 271
+ },
  "Q2350336": {
   "name": "Esso Express",
   "file": "Q2350336.png",
@@ -58,6 +76,12 @@
   "file": "Q565594.png",
   "source": "commons:Eni wordmark.svg",
   "count": 155
+ },
+ "Q2940188": {
+  "name": "Carrefour Contact",
+  "file": "Q2940188.png",
+  "source": "fr.wikipedia:Fichier:Logo Carrefour.svg",
+  "count": 128
  },
  "Q152057": {
   "name": "BP",
@@ -118,6 +142,12 @@
   "file": "Q407448.png",
   "source": "commons:Air Liquide - logo (France, 1991).svg",
   "count": 17
+ },
+ "Q3054251": {
+  "name": "Engen",
+  "file": "Q3054251.png",
+  "source": "en.wikipedia:File:Engen Petroleum logo.svg",
+  "count": 14
  },
  "Q5617505": {
   "name": "Gulf",
