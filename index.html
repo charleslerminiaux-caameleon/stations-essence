@@ -122,7 +122,8 @@
   .lg-wrap > .lg:first-child { visibility: hidden; }
   .lg-wrap.err > .lg:first-child { visibility: visible; }
   .lg-wrap > .lg-img { position: absolute; inset: 0; z-index: 1; }
-  .lg-img img { width: 76%; height: 76%; object-fit: contain; }
+  .lg-img { display: flex; align-items: center; justify-content: center; }
+  .lg-img img { width: 76%; height: 76%; object-fit: contain; min-width: 0; min-height: 0; }
   .lg-img.lg-wide img { width: 88%; height: 70%; }
   /* Wide wordmarks (TotalEnergies, E.Leclerc…): a white label on the pin instead of the small circle */
   .pin .logo.wide { left: 13px; top: 13px; width: 74px; height: 30px; }
@@ -447,7 +448,7 @@ function logoHTML(b) {
   const logo = b.q && logoIndex[b.q];
   if (!logo) return fallback;
   // Official logo on top; if the image fails to load it is removed and the fallback badge shows.
-  return `<div class="lg-wrap">${fallback}<div class="lg lg-img${isWide(b) ? " lg-wide" : ""}"><img src="logos/${esc(logo.file)}" alt="${esc(b.name)}" loading="lazy" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
+  return `<div class="lg-wrap">${fallback}<div class="lg lg-img${isWide(b) ? " lg-wide" : ""}"><img src="logos/${esc(logo.file)}" alt="${esc(b.name)}" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
 }
 function brandColor(b) { return (b.k && BRAND[b.k]?.color) || "#8a93a6"; }
 
