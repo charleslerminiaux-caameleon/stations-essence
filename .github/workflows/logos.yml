@@ -1,0 +1,33 @@
+name: Logos des enseignes
+
+# Télécharge les logos officiels dans logos/ et les enregistre dans la branche.
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/nifty-volta-eedbx6]
+    paths: [scripts/**, .github/workflows/logos.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  logos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Télécharger les logos
+        run: |
+          pip install --quiet pillow
+          rm -f logos/*.png
+          python3 scripts/fetch_logos.py
+      - name: Enregistrer les logos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add logos
+          git diff --cached --quiet && echo "Aucun changement" && exit 0
+          git commit -m "Logos des enseignes (téléchargés automatiquement)"
+          git push
