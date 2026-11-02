@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1b2433">
 <title>Prix Carburants</title>
 <meta name="description" content="Carte des stations-essence et des prix des carburants en France, en temps réel.">
@@ -41,6 +41,7 @@
   svg { display: block; }
 
   #map { position: fixed; inset: 0; background: var(--map-bg); }
+  .dark-map .leaflet-tile-pane { filter: invert(1) hue-rotate(195deg) brightness(.92) contrast(.88) saturate(.55); }
   .leaflet-container { font: inherit; }
   .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.7) !important; }
 
@@ -117,8 +118,10 @@
   .lg-colruyt b { color: #e3001b; font: 900 9px/1 system-ui; }
   .lg-leader b { color: #e2001a; font: 900 9px/1 system-ui; }
   .lg-gen { background: #eef0f4; color: #5f6878; }
-  .lg-wrap { position: relative; width: 100%; height: 100%; }
-  .lg-wrap > .lg-img { position: absolute; inset: 0; }
+  .lg-wrap { position: relative; z-index: 0; width: 100%; height: 100%; }
+  .lg-wrap > .lg:first-child { visibility: hidden; }
+  .lg-wrap.err > .lg:first-child { visibility: visible; }
+  .lg-wrap > .lg-img { position: absolute; inset: 0; z-index: 1; }
   .lg-img img { width: 76%; height: 76%; object-fit: contain; }
 
   /* ---------- Sheets & panels ---------- */
@@ -197,7 +200,7 @@
   .sbar { max-width: 620px; margin: 0 auto; background: var(--panel); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
   .sbar .row { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; }
   .sbar .row button { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: var(--muted); flex: none; }
-  .sbar input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: 17px/1.3 inherit; padding: 10px 4px; }
+  .sbar input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-family: inherit; font-size: 17px; line-height: 1.3; padding: 10px 4px; }
   .sbar ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); max-height: 60vh; overflow-y: auto; }
   .sbar li { padding: 12px 16px; cursor: pointer; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border); }
   .sbar li:last-child { border-bottom: 0; }
@@ -270,7 +273,7 @@
     <p class="muted">Prix : <a href="https://data.economie.gouv.fr/explore/dataset/prix-des-carburants-en-france-flux-instantane-v2/" target="_blank" rel="noopener">data.economie.gouv.fr</a> (flux officiel, mis à jour toutes les 10 min).<br>
     Marques des stations : contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.<br>
     Logos : <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> / <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a>.<br>
-    Fond de carte : © OpenStreetMap, © CARTO.</p>
+    Fond de carte : © OpenStreetMap.</p>
     <p class="muted">Les logos et marques appartiennent à leurs propriétaires respectifs.</p>
   </div>
 </aside>
@@ -307,7 +310,7 @@
 <script>
 const API = "https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records";
 const GEOCODERS = ["https://data.geopf.fr/geocodage/search", "https://api-adresse.data.gouv.fr/search/"];
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const FUELS = [
   { key: "gazole", label: "Gazole",   eu: "B7",  shape: "sq" },
   { key: "sp95",   label: "SP95",     eu: "E5",  shape: "ci", sub: "95" },
@@ -356,22 +359,21 @@ if (!FUELS.some(f => f.key === fuel)) fuel = "gazole";
 let sortBy = store.get("sort", "price");
 let brandFilter = store.get("brandFilter", "all");
 let mapStyle = store.get("mapStyle", "dark");
-const brandCache = store.get("brands-v2", {}); // station id -> [brandKey, displayName, wikidataId]
+const brandCache = store.get("brands-v3", {}); // station id -> [brandKey, displayName, wikidataId, retryAfter?]
+try { localStorage.removeItem("brands-v1"); localStorage.removeItem("brands-v2"); } catch (e) {}
 const brandQid = store.get("brandQid-v1", {});  // brandKey -> wikidata id learned from OSM
 const logoCache = store.get("logos-v1", {});    // wikidata id -> official logo URL ("" = none)
 
 // --- Map
 const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([46.6, 2.4], 6);
 L.control.zoom({ position: "topright" }).addTo(map);
-const TILES = {
-  dark:  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-  light: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-};
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> · Prix : data.economie.gouv.fr';
-let tiles = L.tileLayer(TILES[mapStyle], { maxZoom: 19, subdomains: "abcd", attribution: ATTR }).addTo(map);
+// OpenStreetMap tiles (no API key). The dark style is the same tiles with a CSS filter.
+const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Prix : data.economie.gouv.fr';
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: ATTR }).addTo(map);
 function setMapStyle(v) {
+  if (v !== "dark" && v !== "light") v = "dark";
   mapStyle = v; store.set("mapStyle", v);
-  tiles.setUrl(TILES[v]);
+  document.body.classList.toggle("dark-map", v === "dark");
   document.documentElement.style.setProperty("--map-bg", v === "dark" ? "#1b2433" : "#eef0ec");
   document.querySelectorAll("#mapStyle button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
 }
@@ -428,7 +430,7 @@ function logoHTML(b) {
   const url = b.q && logoCache[b.q];
   if (!url) return fallback;
   // Official logo on top; if the image fails to load it is removed and the fallback badge shows through.
-  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="${esc(url)}" alt="${esc(b.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div></div>`;
+  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="${esc(url)}" alt="${esc(b.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
 }
 
 // Official logos: Wikidata "logo image" (P154) of the brand, served by Wikimedia Commons.
@@ -487,6 +489,8 @@ async function overpass(center, km) {
       clearTimeout(t);
       if (!r.ok) continue;
       const j = await r.json();
+      // An overloaded server answers 200 with no elements and a "remark": treat it as a failure.
+      if (!(j.elements || []).length && j.remark) continue;
       return (j.elements || []).map(e => {
         const lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
         return lat == null ? null : { ll: L.latLng(lat, lon), tags: e.tags || {} };
@@ -496,12 +500,12 @@ async function overpass(center, km) {
   return null;
 }
 async function loadBrands(id, center, km) {
-  const missing = stations.filter(s => !(s.r.id in brandCache));
+  const missing = stations.filter(s => { const c = brandCache[s.r.id]; return !c || (c[3] && Date.now() > c[3]); });
   if (!missing.length) return loadLogos();
   const pois = await overpass(center, km);
-  if (!pois) return loadLogos();
+  if (!pois || !pois.length) return loadLogos();
   missing.forEach(s => {
-    let best = null, bd = 250;
+    let best = null, bd = 400;
     for (const p of pois) { const d = p.ll.distanceTo(s.ll); if (d < bd) { bd = d; best = p; } }
     const t = best?.tags || {};
     const raw = t.brand || t.name || t.operator || "";
@@ -509,8 +513,9 @@ async function loadBrands(id, center, km) {
     const q = /^Q\d+$/.test(t["brand:wikidata"] || "") ? t["brand:wikidata"] : "";
     if (k && q) brandQid[k] = q;
     brandCache[s.r.id] = [k || "", k ? "" : title(raw).slice(0, 40), q];
+    if (!best) brandCache[s.r.id].push(Date.now() + 3 * 864e5); // no OSM match: retry in 3 days
   });
-  store.set("brands-v2", brandCache);
+  store.set("brands-v3", brandCache);
   store.set("brandQid-v1", brandQid);
   if (id !== loadId) return;
   refreshBrands();
