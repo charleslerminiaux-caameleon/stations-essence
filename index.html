@@ -117,6 +117,9 @@
   .lg-colruyt b { color: #e3001b; font: 900 9px/1 system-ui; }
   .lg-leader b { color: #e2001a; font: 900 9px/1 system-ui; }
   .lg-gen { background: #eef0f4; color: #5f6878; }
+  .lg-wrap { position: relative; width: 100%; height: 100%; }
+  .lg-wrap > .lg-img { position: absolute; inset: 0; }
+  .lg-img img { width: 76%; height: 76%; object-fit: contain; }
 
   /* ---------- Sheets & panels ---------- */
   .backdrop { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .2s; }
@@ -266,8 +269,9 @@
     <div class="section">Sources</div>
     <p class="muted">Prix : <a href="https://data.economie.gouv.fr/explore/dataset/prix-des-carburants-en-france-flux-instantane-v2/" target="_blank" rel="noopener">data.economie.gouv.fr</a> (flux officiel, mis à jour toutes les 10 min).<br>
     Marques des stations : contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.<br>
+    Logos : <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> / <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a>.<br>
     Fond de carte : © OpenStreetMap, © CARTO.</p>
-    <p class="muted">Les logos sont des représentations simplifiées ; les marques appartiennent à leurs propriétaires respectifs.</p>
+    <p class="muted">Les logos et marques appartiennent à leurs propriétaires respectifs.</p>
   </div>
 </aside>
 
@@ -352,7 +356,9 @@ if (!FUELS.some(f => f.key === fuel)) fuel = "gazole";
 let sortBy = store.get("sort", "price");
 let brandFilter = store.get("brandFilter", "all");
 let mapStyle = store.get("mapStyle", "dark");
-const brandCache = store.get("brands-v1", {}); // station id -> [brandKey, displayName]
+const brandCache = store.get("brands-v2", {}); // station id -> [brandKey, displayName, wikidataId]
+const brandQid = store.get("brandQid-v1", {});  // brandKey -> wikidata id learned from OSM
+const logoCache = store.get("logos-v1", {});    // wikidata id -> official logo URL ("" = none)
 
 // --- Map
 const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([46.6, 2.4], 6);
@@ -412,14 +418,45 @@ function matchBrand(text) {
 }
 function brandFor(r) {
   const c = brandCache[r.id];
-  if (c) return { k: c[0] || null, name: c[1] || (c[0] ? BRAND[c[0]].name : "") };
+  if (c) { const k = c[0] || null; return { k, name: c[1] || (k ? BRAND[k].name : ""), q: c[2] || (k && brandQid[k]) || null }; }
   const k = matchBrand(r.adresse);
-  return { k, name: k ? BRAND[k].name : "" };
+  return { k, name: k ? BRAND[k].name : "", q: (k && brandQid[k]) || null };
 }
 function logoHTML(b) {
   const def = b.k && BRAND[b.k];
-  if (def) return `<div class="lg lg-${def.k}">${def.html}</div>`;
-  return `<div class="lg lg-gen">${PUMP}</div>`;
+  const fallback = def ? `<div class="lg lg-${def.k}">${def.html}</div>` : `<div class="lg lg-gen">${PUMP}</div>`;
+  const url = b.q && logoCache[b.q];
+  if (!url) return fallback;
+  // Official logo on top; if the image fails to load it is removed and the fallback badge shows through.
+  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="${esc(url)}" alt="${esc(b.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div></div>`;
+}
+
+// Official logos: Wikidata "logo image" (P154) of the brand, served by Wikimedia Commons.
+async function loadLogos() {
+  const qids = [...new Set(stations.map(s => s.brand.q).filter(q => q && /^Q\d+$/.test(q) && !(q in logoCache)))];
+  if (!qids.length) return;
+  for (let i = 0; i < qids.length; i += 50) {
+    const batch = qids.slice(i, i + 50);
+    try {
+      const u = new URL("https://www.wikidata.org/w/api.php");
+      Object.entries({ action: "wbgetentities", ids: batch.join("|"), props: "claims", format: "json", origin: "*" }).forEach(([k, v]) => u.searchParams.set(k, v));
+      const j = await (await fetch(u)).json();
+      batch.forEach(q => {
+        const claims = (j.entities?.[q]?.claims?.P154 || []).filter(c => c.rank !== "deprecated" && c.mainsnak?.datavalue);
+        claims.sort((a, b) => (b.rank === "preferred") - (a.rank === "preferred"));
+        const file = claims[0]?.mainsnak.datavalue.value;
+        logoCache[q] = file ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file.replace(/ /g, "_"))}?width=120` : "";
+      });
+    } catch (e) { return; }
+  }
+  store.set("logos-v1", logoCache);
+  refreshBrands();
+}
+function refreshBrands() {
+  stations.forEach(s => { s.brand = brandFor(s.r); markers[s.r.id]?.setIcon(iconFor(s)); });
+  cluster.refreshClusters();
+  renderList();
+  if (selectedId) renderDetail();
 }
 function brandColor(b) { return (b.k && BRAND[b.k]?.color) || "#8a93a6"; }
 
@@ -460,26 +497,24 @@ async function overpass(center, km) {
 }
 async function loadBrands(id, center, km) {
   const missing = stations.filter(s => !(s.r.id in brandCache));
-  if (!missing.length) return;
+  if (!missing.length) return loadLogos();
   const pois = await overpass(center, km);
-  if (!pois) return;
+  if (!pois) return loadLogos();
   missing.forEach(s => {
     let best = null, bd = 250;
     for (const p of pois) { const d = p.ll.distanceTo(s.ll); if (d < bd) { bd = d; best = p; } }
     const t = best?.tags || {};
     const raw = t.brand || t.name || t.operator || "";
     const k = matchBrand([t.brand, t.name, t.operator].filter(Boolean).join(" ")) || matchBrand(s.r.adresse);
-    brandCache[s.r.id] = [k || "", k ? "" : title(raw).slice(0, 40)];
+    const q = /^Q\d+$/.test(t["brand:wikidata"] || "") ? t["brand:wikidata"] : "";
+    if (k && q) brandQid[k] = q;
+    brandCache[s.r.id] = [k || "", k ? "" : title(raw).slice(0, 40), q];
   });
-  store.set("brands-v1", brandCache);
+  store.set("brands-v2", brandCache);
+  store.set("brandQid-v1", brandQid);
   if (id !== loadId) return;
-  stations.forEach(s => {
-    const nb = brandFor(s.r);
-    if (nb.k !== s.brand.k || nb.name !== s.brand.name) { s.brand = nb; markers[s.r.id]?.setIcon(iconFor(s)); }
-  });
-  cluster.refreshClusters();
-  renderList();
-  if (selectedId) renderDetail();
+  refreshBrands();
+  loadLogos();
 }
 
 // --- Data
