@@ -271,7 +271,7 @@
     </div>
     <div class="section">Sources</div>
     <p class="muted">Prix : <a href="https://data.economie.gouv.fr/explore/dataset/prix-des-carburants-en-france-flux-instantane-v2/" target="_blank" rel="noopener">data.economie.gouv.fr</a> (flux officiel, mis à jour toutes les 10 min).<br>
-    Marques des stations : contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.<br>
+    Marques des stations : contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> (mises à jour chaque semaine).<br>
     Logos : <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> / <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a>.<br>
     Fond de carte : © OpenStreetMap.</p>
     <p class="muted">Les logos et marques appartiennent à leurs propriétaires respectifs.</p>
@@ -310,7 +310,6 @@
 <script>
 const API = "https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records";
 const GEOCODERS = ["https://data.geopf.fr/geocodage/search", "https://api-adresse.data.gouv.fr/search/"];
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const FUELS = [
   { key: "gazole", label: "Gazole",   eu: "B7",  shape: "sq" },
   { key: "sp95",   label: "SP95",     eu: "E5",  shape: "ci", sub: "95" },
@@ -359,10 +358,7 @@ if (!FUELS.some(f => f.key === fuel)) fuel = "gazole";
 let sortBy = store.get("sort", "price");
 let brandFilter = store.get("brandFilter", "all");
 let mapStyle = store.get("mapStyle", "dark");
-const brandCache = store.get("brands-v3", {}); // station id -> [brandKey, displayName, wikidataId, retryAfter?]
-try { localStorage.removeItem("brands-v1"); localStorage.removeItem("brands-v2"); } catch (e) {}
-const brandQid = store.get("brandQid-v1", {});  // brandKey -> wikidata id learned from OSM
-const logoCache = store.get("logos-v1", {});    // wikidata id -> official logo URL ("" = none)
+try { ["brands-v1", "brands-v2", "brands-v3", "brandQid-v1", "logos-v1"].forEach(k => localStorage.removeItem(k)); } catch (e) {}
 
 // --- Map
 const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([46.6, 2.4], 6);
@@ -418,47 +414,34 @@ function matchBrand(text) {
   if (!text) return null;
   return BRANDS.find(b => b.re.test(text))?.k || null;
 }
+// Station brands (brands.json) and official logos (logos/) are generated server-side
+// by scripts/build_brands.py and scripts/fetch_logos.py, and hosted with the site.
+let brandData = null, logoIndex = {};
+const keyQid = {}; // brand key -> wikidata id of its logo, for stations matched by address only
+const ready = Promise.all([
+  fetch("brands.json").then(r => r.ok ? r.json() : null).catch(() => null),
+  fetch("logos/index.json").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+]).then(([b, l]) => {
+  brandData = b; logoIndex = l || {};
+  Object.entries(logoIndex).sort((a, b) => b[1].count - a[1].count).forEach(([q, v]) => {
+    const k = matchBrand(v.name); if (k && !keyQid[k]) keyQid[k] = q;
+  });
+});
 function brandFor(r) {
-  const c = brandCache[r.id];
-  if (c) { const k = c[0] || null; return { k, name: c[1] || (k ? BRAND[k].name : ""), q: c[2] || (k && brandQid[k]) || null }; }
-  const k = matchBrand(r.adresse);
-  return { k, name: k ? BRAND[k].name : "", q: (k && brandQid[k]) || null };
+  const e = brandData ? brandData.b[brandData.s[r.id]] : null;
+  const raw = e ? e[0] : "";
+  const k = matchBrand(raw) || matchBrand(r.adresse);
+  const q = e && logoIndex[e[1]] ? e[1] : (k && keyQid[k]) || null;
+  const name = k ? BRAND[k].name : raw ? (/[a-z]/.test(raw) ? raw : title(raw)) : "";
+  return { k, name, q };
 }
 function logoHTML(b) {
   const def = b.k && BRAND[b.k];
   const fallback = def ? `<div class="lg lg-${def.k}">${def.html}</div>` : `<div class="lg lg-gen">${PUMP}</div>`;
-  const url = b.q && logoCache[b.q];
-  if (!url) return fallback;
-  // Official logo on top; if the image fails to load it is removed and the fallback badge shows through.
-  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="${esc(url)}" alt="${esc(b.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
-}
-
-// Official logos: Wikidata "logo image" (P154) of the brand, served by Wikimedia Commons.
-async function loadLogos() {
-  const qids = [...new Set(stations.map(s => s.brand.q).filter(q => q && /^Q\d+$/.test(q) && !(q in logoCache)))];
-  if (!qids.length) return;
-  for (let i = 0; i < qids.length; i += 50) {
-    const batch = qids.slice(i, i + 50);
-    try {
-      const u = new URL("https://www.wikidata.org/w/api.php");
-      Object.entries({ action: "wbgetentities", ids: batch.join("|"), props: "claims", format: "json", origin: "*" }).forEach(([k, v]) => u.searchParams.set(k, v));
-      const j = await (await fetch(u)).json();
-      batch.forEach(q => {
-        const claims = (j.entities?.[q]?.claims?.P154 || []).filter(c => c.rank !== "deprecated" && c.mainsnak?.datavalue);
-        claims.sort((a, b) => (b.rank === "preferred") - (a.rank === "preferred"));
-        const file = claims[0]?.mainsnak.datavalue.value;
-        logoCache[q] = file ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file.replace(/ /g, "_"))}?width=120` : "";
-      });
-    } catch (e) { return; }
-  }
-  store.set("logos-v1", logoCache);
-  refreshBrands();
-}
-function refreshBrands() {
-  stations.forEach(s => { s.brand = brandFor(s.r); markers[s.r.id]?.setIcon(iconFor(s)); });
-  cluster.refreshClusters();
-  renderList();
-  if (selectedId) renderDetail();
+  const logo = b.q && logoIndex[b.q];
+  if (!logo) return fallback;
+  // Official logo on top; if the image fails to load it is removed and the fallback badge shows.
+  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="logos/${esc(logo.file)}" alt="${esc(b.name)}" loading="lazy" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
 }
 function brandColor(b) { return (b.k && BRAND[b.k]?.color) || "#8a93a6"; }
 
@@ -478,48 +461,6 @@ function pinHTML(s, best, count) {
 }
 function iconFor(s) {
   return L.divIcon({ className: "", html: pinHTML(s, s.fresh ? s : null, 0), iconSize: [100, 78], iconAnchor: [50, 76] });
-}
-
-async function overpass(center, km) {
-  const q = `[out:json][timeout:25];nwr["amenity"="fuel"](around:${Math.round(km * 1000 + 800)},${center.lat.toFixed(5)},${center.lng.toFixed(5)});out center tags;`;
-  for (const url of OVERPASS) {
-    try {
-      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
-      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ctl.signal });
-      clearTimeout(t);
-      if (!r.ok) continue;
-      const j = await r.json();
-      // An overloaded server answers 200 with no elements and a "remark": treat it as a failure.
-      if (!(j.elements || []).length && j.remark) continue;
-      return (j.elements || []).map(e => {
-        const lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
-        return lat == null ? null : { ll: L.latLng(lat, lon), tags: e.tags || {} };
-      }).filter(Boolean);
-    } catch (e) {}
-  }
-  return null;
-}
-async function loadBrands(id, center, km) {
-  const missing = stations.filter(s => { const c = brandCache[s.r.id]; return !c || (c[3] && Date.now() > c[3]); });
-  if (!missing.length) return loadLogos();
-  const pois = await overpass(center, km);
-  if (!pois || !pois.length) return loadLogos();
-  missing.forEach(s => {
-    let best = null, bd = 400;
-    for (const p of pois) { const d = p.ll.distanceTo(s.ll); if (d < bd) { bd = d; best = p; } }
-    const t = best?.tags || {};
-    const raw = t.brand || t.name || t.operator || "";
-    const k = matchBrand([t.brand, t.name, t.operator].filter(Boolean).join(" ")) || matchBrand(s.r.adresse);
-    const q = /^Q\d+$/.test(t["brand:wikidata"] || "") ? t["brand:wikidata"] : "";
-    if (k && q) brandQid[k] = q;
-    brandCache[s.r.id] = [k || "", k ? "" : title(raw).slice(0, 40), q];
-    if (!best) brandCache[s.r.id].push(Date.now() + 3 * 864e5); // no OSM match: retry in 3 days
-  });
-  store.set("brands-v3", brandCache);
-  store.set("brandQid-v1", brandQid);
-  if (id !== loadId) return;
-  refreshBrands();
-  loadLogos();
 }
 
 // --- Data
@@ -554,6 +495,7 @@ async function load() {
   toast(`Chargement des prix ${esc(label(fuel))}…`, { spin: true });
   const where = `within_distance(geom, geom'POINT(${c.lng.toFixed(5)} ${c.lat.toFixed(5)})', ${km}km) and ${fuel}_prix is not null`;
   try {
+    await ready;
     const pages = await Promise.all([...Array(PAGES).keys()].map(i => {
       const u = new URL(API);
       u.searchParams.set("where", where);
@@ -572,7 +514,6 @@ async function load() {
       return { r, ll, price: +r[`${fuel}_prix`], fresh: isFresh(r[`${fuel}_maj`]), dist: c.distanceTo(ll) / 1000, brand: brandFor(r) };
     });
     render();
-    loadBrands(id, c, km);
   } catch (err) {
     if (id !== loadId) return;
     toast("Impossible de charger les prix. Vérifiez votre connexion.", { ms: 6000 });
