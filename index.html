@@ -123,6 +123,11 @@
   .lg-wrap.err > .lg:first-child { visibility: visible; }
   .lg-wrap > .lg-img { position: absolute; inset: 0; z-index: 1; }
   .lg-img img { width: 76%; height: 76%; object-fit: contain; }
+  .lg-img.lg-wide img { width: 88%; height: 70%; }
+  /* Wide wordmarks (TotalEnergies, E.Leclerc…): a white label on the pin instead of the small circle */
+  .pin .logo.wide { left: 13px; top: 13px; width: 74px; height: 30px; }
+  .pin .logo.wide .lg { border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .pin .logo.wide .lg-img img { width: 92%; height: 82%; }
 
   /* ---------- Sheets & panels ---------- */
   .backdrop { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .2s; }
@@ -435,13 +440,14 @@ function brandFor(r) {
   const name = k ? BRAND[k].name : raw ? (/[a-z]/.test(raw) ? raw : title(raw)) : "";
   return { k, name, q };
 }
+const isWide = b => { const l = b.q && logoIndex[b.q]; return !!(l && l.w / l.h > 2.2); };
 function logoHTML(b) {
   const def = b.k && BRAND[b.k];
   const fallback = def ? `<div class="lg lg-${def.k}">${def.html}</div>` : `<div class="lg lg-gen">${PUMP}</div>`;
   const logo = b.q && logoIndex[b.q];
   if (!logo) return fallback;
   // Official logo on top; if the image fails to load it is removed and the fallback badge shows.
-  return `<div class="lg-wrap">${fallback}<div class="lg lg-img"><img src="logos/${esc(logo.file)}" alt="${esc(b.name)}" loading="lazy" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
+  return `<div class="lg-wrap">${fallback}<div class="lg lg-img${isWide(b) ? " lg-wide" : ""}"><img src="logos/${esc(logo.file)}" alt="${esc(b.name)}" loading="lazy" onerror="var w=this.parentNode.parentNode;w.classList.add('err');this.parentNode.remove()"></div></div>`;
 }
 function brandColor(b) { return (b.k && BRAND[b.k]?.color) || "#8a93a6"; }
 
@@ -455,7 +461,7 @@ function pinHTML(s, best, count) {
   const badge = count ? `<span class="num">${count}</span>` : (!s.fresh ? `<span class="warn">∅</span>` : "");
   return `<div class="pin${s && s.r.id === selectedId ? " sel" : ""}">
     <svg class="head" width="56" height="76" viewBox="0 0 56 76"><path d="M28 74C22 62 3 49 3 28a25 25 0 0 1 50 0c0 21-19 34-25 46z" fill="${color}" stroke="#fff" stroke-width="2.5"/></svg>
-    <div class="logo">${inner}</div>${badge}
+    <div class="logo${!count && isWide(s.brand) ? " wide" : ""}">${inner}</div>${badge}
     <span class="ribbon ${tierCls}">${count && best ? "dès " : ""}${price}</span>
   </div>`;
 }

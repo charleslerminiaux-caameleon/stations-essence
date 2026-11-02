@@ -19,9 +19,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Télécharger les logos
-        run: python3 scripts/fetch_logos.py
-      - name: Tester la génération de brands.json
-        run: python3 scripts/build_brands.py /tmp/brands.json
+        run: |
+          pip install --quiet pillow
+          rm -f logos/*.png
+          python3 scripts/fetch_logos.py
       - name: Enregistrer les logos
         run: |
           git config user.name "github-actions[bot]"

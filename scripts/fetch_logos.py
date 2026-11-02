@@ -2,8 +2,8 @@
 
 Sources, dans l'ordre :
  1. Wikidata de la marque (tag OSM brand:wikidata) : icône (P8972, P2910) puis
-    logo (P154), fichier sur Wikimedia Commons rendu en PNG ;
- 2. le logo de l'infobox de la page Wikipédia (en, puis fr) de la marque —
+    logo (P154) actuels, le plus carré, fichier sur Wikimedia Commons rendu en PNG ;
+ 2. le logo de l'infobox de la page Wikipédia (fr, puis en) de la marque —
     utile pour les logos non libres (Carrefour, Système U…) absents de Commons ;
  3. l'icône « apple-touch-icon » du site officiel (P856).
 Résultat : logos/<QID>.png + logos/index.json {QID: {name, file, source, count}}.
@@ -25,34 +25,60 @@ MAX_BRANDS = int(os.environ.get("MAX_BRANDS", "60"))
 # Pages Wikipédia à utiliser quand la marque n'a pas sa propre page (ex. « Station U »).
 WIKI_TITLES = {
     "Q2529029": ["Système U"],
-    "Q2689639": ["Carrefour (company)", "Carrefour (entreprise)"],
-    "Q2940188": ["Carrefour (company)", "Carrefour (entreprise)"],
+}
+# Fichiers imposés quand la source automatique donne un mauvais logo.
+OVERRIDES = {
+    "Q217599": ("fr.wikipedia.org", "Logo Carrefour.svg"),   # Carrefour
+    "Q2689639": ("fr.wikipedia.org", "Logo Carrefour.svg"),  # Carrefour Market
+    "Q2940188": ("fr.wikipedia.org", "Logo Carrefour.svg"),  # Carrefour Contact
 }
 
 
-def wiki_logo(lang, title):
-    api = f"https://{lang}.wikipedia.org/w/api.php?"
-    j = get_json(api + urllib.parse.urlencode(
-        {"action": "query", "titles": title, "prop": "images", "imlimit": "100", "redirects": "1", "format": "json"}))
-    files = [i["title"] for p in j.get("query", {}).get("pages", {}).values() for i in p.get("images", [])]
-    files = [f for f in files if "logo" in f.lower() and re.search(r"\.(svg|png)$", f, re.I)]
-    if not files:
-        raise ValueError("aucune image « logo »")
-    j = get_json(api + urllib.parse.urlencode(
-        {"action": "query", "titles": files[0], "prop": "imageinfo", "iiprop": "url", "iiurlwidth": "256", "format": "json"}))
+def wiki_file(host, file, width=256):
+    """Télécharge un fichier d'un wiki (Commons ou Wikipédia) rendu en PNG. → (octets, largeur, hauteur)"""
+    j = get_json(f"https://{host}/w/api.php?" + urllib.parse.urlencode(
+        {"action": "query", "titles": "File:" + file, "prop": "imageinfo", "iiprop": "url|size",
+         "iiurlwidth": str(width), "format": "json"}))
     info = next(iter(j["query"]["pages"].values()))["imageinfo"][0]
     body, ctype = http(info.get("thumburl") or info["url"], timeout=60)
     if not ctype.startswith("image/"):
         raise ValueError(f"type inattendu {ctype}")
-    return body, f"{lang}.wikipedia:{files[0]}"
+    return body, info["width"], info["height"]
 
 
-def commons_png(filename, width=256):
-    url = "https://commons.wikimedia.org/wiki/Special:FilePath/" + urllib.parse.quote(filename.replace(" ", "_")) + f"?width={width}"
-    body, ctype = http(url, timeout=60)
-    if not ctype.startswith("image/"):
-        raise ValueError(f"type inattendu {ctype}")
-    return body, ctype
+def infobox_logo(lang, title):
+    """Fichier indiqué dans le paramètre « logo » de l'infobox de la page Wikipédia."""
+    j = get_json(f"https://{lang}.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
+        {"action": "parse", "page": title, "prop": "wikitext", "section": "0", "redirects": "1", "format": "json"}))
+    wt = j["parse"]["wikitext"]["*"]
+    m = re.search(r"\|\s*logo\s*=\s*(?:\[\[)?\s*(?:(?:File|Fichier|Image)\s*:)?\s*([^\]|\n}=]+?\.(?:svg|png|jpe?g|gif))", wt, re.I)
+    if not m:
+        raise ValueError("pas de logo dans l'infobox")
+    return m.group(1).strip()
+
+
+def trim(body):
+    """Retire les marges transparentes ou blanches autour du logo."""
+    from PIL import Image  # installé par le workflow
+    import io
+    im = Image.open(io.BytesIO(body)).convert("RGBA")
+    px = im.load()
+    mask = Image.new("L", im.size, 0)
+    mp = mask.load()
+    for y in range(im.height):
+        for x in range(im.width):
+            r, g, b, a = px[x, y]
+            if a > 16 and not (r > 240 and g > 240 and b > 240):
+                mp[x, y] = 255
+    box = mask.getbbox()
+    if box:
+        im = im.crop(box)
+    pad = max(2, int(max(im.size) * 0.04))
+    out = Image.new("RGBA", (im.width + 2 * pad, im.height + 2 * pad), (0, 0, 0, 0))
+    out.paste(im, (pad, pad))
+    buf = io.BytesIO()
+    out.save(buf, "PNG", optimize=True)
+    return buf.getvalue(), out.width, out.height
 
 
 def site_icon(site):
@@ -97,27 +123,49 @@ def main():
         cs.sort(key=lambda c: c.get("rank") != "preferred")
         return cs[0]["mainsnak"]["datavalue"]["value"] if cs else None
 
+    def current_logos(e):
+        """Fichiers logo/icône actuels (sans date de fin P582) de l'entité Wikidata."""
+        files, old = [], []
+        for p in ("P8972", "P2910", "P154"):
+            for c in e.get("claims", {}).get(p, []):
+                if c.get("rank") == "deprecated" or not c["mainsnak"].get("datavalue"):
+                    continue
+                (old if "P582" in c.get("qualifiers", {}) else files).append(c["mainsnak"]["datavalue"]["value"])
+        return files or old
+
     index = {}
     for q in top:
         e = ents.get(q, {})
         name = names[q]
         body = source = None
-        for prop in ("P8972", "P2910", "P154"):
-            logo = claim(e, prop)
-            if not logo or body is not None:
-                continue
+        if q in OVERRIDES:
+            host, file = OVERRIDES[q]
             try:
-                body, _ = commons_png(logo)
-                source = f"commons:{logo}"
+                body, _, _ = wiki_file(host, file)
+                source = f"{host}:{file}"
             except Exception as ex:  # noqa: BLE001
-                print(f"  {q} {name}: Commons KO ({ex})")
+                print(f"  {q} {name}: fichier imposé KO ({ex})")
+        if body is None:
+            # Le plus « carré » des logos actuels : il tient mieux dans le rond du marqueur.
+            sized = []
+            for f in current_logos(e):
+                try:
+                    b, w, h = wiki_file("commons.wikimedia.org", f)
+                    sized.append((max(w / h, h / w), f, b))
+                except Exception as ex:  # noqa: BLE001
+                    print(f"  {q} {name}: Commons « {f} » KO ({ex})")
+            if sized:
+                _, f, body = min(sized)
+                source = f"commons:{f}"
         if body is None:
             links = e.get("sitelinks", {})
-            tries = [(l, links[f"{l}wiki"]["title"]) for l in ("en", "fr") if f"{l}wiki" in links]
-            tries += [(l, t) for t in WIKI_TITLES.get(q, []) for l in ("en", "fr")]
+            tries = [(l, t) for t in WIKI_TITLES.get(q, []) for l in ("fr", "en")]
+            tries += [(l, links[f"{l}wiki"]["title"]) for l in ("fr", "en") if f"{l}wiki" in links]
             for lang, title in tries:
                 try:
-                    body, source = wiki_logo(lang, title)
+                    f = infobox_logo(lang, title)
+                    body, _, _ = wiki_file(f"{lang}.wikipedia.org", f)
+                    source = f"{lang}.wikipedia:{f}"
                     break
                 except Exception as ex:  # noqa: BLE001
                     print(f"  {q} {name}: {lang}.wikipedia « {title} » KO ({ex})")
@@ -132,10 +180,11 @@ def main():
         if body is None:
             print(f"✗ {q} {name} ({counts[q]} stations) : aucun logo")
             continue
+        body, w, h = trim(body)
         fn = f"{q}.png"
         with open(os.path.join(OUT, fn), "wb") as f:
             f.write(body)
-        index[q] = {"name": name, "file": fn, "source": source, "count": counts[q]}
+        index[q] = {"name": name, "file": fn, "w": w, "h": h, "source": source, "count": counts[q]}
         print(f"✓ {q} {name} ({counts[q]} stations) ← {source}")
 
     with open(os.path.join(OUT, "index.json"), "w") as f:
