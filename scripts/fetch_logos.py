@@ -31,6 +31,7 @@ OVERRIDES = {
     "Q217599": ("fr.wikipedia.org", "Logo Carrefour.svg"),   # Carrefour
     "Q2689639": ("fr.wikipedia.org", "Logo Carrefour.svg"),  # Carrefour Market
     "Q2940188": ("fr.wikipedia.org", "Logo Carrefour.svg"),  # Carrefour Contact
+    "Q154950": ("commons.wikimedia.org", "Shell wordmark 2019.svg"),  # Shell (sinon logo de 1948)
 }
 
 
